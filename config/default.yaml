@@ -1,0 +1,61 @@
+# InfraRAG defaults -- single source of truth for runtime settings.
+# Environment variables INFRARAG_* override matching fields (see config.py).
+
+app:
+  name: InfraRAG
+  data_dir: data
+
+ollama:
+  base_url: http://localhost:11434
+  chat_model: qwen2.5:3b
+  embed_model: nomic-embed-text
+  timeout_s: 120
+
+chroma:
+  persist_dir: data/chroma
+  collection: infrarag
+
+ingest:
+  # Set via UI, .env (INFRARAG_SOURCE_DIR), or override this value.
+  source_dir: null
+  recursive: true
+  follow_symlinks: false
+  differential: true
+  manifest_path: data/chroma/ingest_manifest.json
+  include_extensions:
+    - .txt
+    - .md
+    - .pdf
+    - .docx
+    - .xlsx
+    - .pptx
+    - .odt
+    - .ods
+    - .odp
+  exclude_dirs:
+    - .git
+    - node_modules
+    - __pycache__
+    - .venv
+    - venv
+  max_file_bytes: 20971520  # 20 MiB
+
+# Character-based chunking (token-aware chunking is a future step).
+chunking:
+  size: 800
+  overlap: 120
+
+rag:
+  top_k: 5
+  temperature: 0.2
+
+attachments:
+  max_file_bytes: 20971520
+  url_timeout_s: 30
+  allowed_url_schemes:
+    - http
+    - https
+
+ui:
+  host: 127.0.0.1
+  port: 8501
