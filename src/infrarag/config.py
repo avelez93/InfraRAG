@@ -12,6 +12,7 @@ import yaml
 # Repo root: src/infrarag/config.py -> parents[2]
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_CONFIG_PATH = _REPO_ROOT / "config" / "default.yaml"
+_LOCAL_CONFIG_PATH = _REPO_ROOT / "config" / "local.yaml"
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,18 @@ class ChromaConfig:
 
 
 @dataclass(frozen=True)
+class OcrConfig:
+    enabled: bool
+    lang: str
+    use_gpu: bool
+    min_text_chars: int
+    max_pdf_pages: int
+    skip_photo_folders: bool
+    photo_folder_image_ratio: float
+    photo_folder_min_files: int
+
+
+@dataclass(frozen=True)
 class IngestConfig:
     source_dir: str | None
     recursive: bool
@@ -44,6 +57,7 @@ class IngestConfig:
     include_extensions: tuple[str, ...]
     exclude_dirs: tuple[str, ...]
     max_file_bytes: int
+    ocr: OcrConfig
 
 
 @dataclass(frozen=True)
@@ -56,6 +70,31 @@ class ChunkingConfig:
 class RagConfig:
     top_k: int
     temperature: float
+    hybrid_enabled: bool = True
+    hybrid_fetch_multiplier: int = 4
+    hybrid_keyword_weight: float = 0.45
+
+
+@dataclass(frozen=True)
+class ProfilesConfig:
+    org_dir: str
+    users_root: str
+    user_id: str
+    always_include_max_chars: int
+
+
+@dataclass(frozen=True)
+class WebConfig:
+    enabled: bool
+    score_threshold: float
+    max_results: int
+    fetch_top_n: int
+
+
+@dataclass(frozen=True)
+class MemoryConfig:
+    enabled: bool
+    propose_after_answer: bool
 
 
 @dataclass(frozen=True)
@@ -79,6 +118,9 @@ class AppConfig:
     ingest: IngestConfig
     chunking: ChunkingConfig
     rag: RagConfig
+    profiles: ProfilesConfig
+    web: WebConfig
+    memory: MemoryConfig
     attachments: AttachmentsConfig
     ui: UiConfig
     config_path: Path = field(repr=False)
@@ -97,6 +139,29 @@ def _env(name: str) -> str | None:
     return value.strip()
 
 
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Shallow-merge top-level sections; nested dicts are updated key-wise."""
+    result: dict[str, Any] = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            merged = dict(result[key])
+            merged.update(value)
+            result[key] = merged
+        else:
+            result[key] = value
+    return result
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    with path.open(encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"Config root must be a mapping: {path}")
+    return raw
+
+
 def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     """Apply INFRARAG_* environment overrides onto a loaded YAML dict."""
     data = {
@@ -106,6 +171,9 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "ingest": dict(raw.get("ingest") or {}),
         "chunking": dict(raw.get("chunking") or {}),
         "rag": dict(raw.get("rag") or {}),
+        "profiles": dict(raw.get("profiles") or {}),
+        "web": dict(raw.get("web") or {}),
+        "memory": dict(raw.get("memory") or {}),
         "attachments": dict(raw.get("attachments") or {}),
         "ui": dict(raw.get("ui") or {}),
     }
@@ -120,8 +188,24 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         data["chroma"]["persist_dir"] = v
     if (v := _env("INFRARAG_SOURCE_DIR")) is not None:
         data["ingest"]["source_dir"] = v
+    if (v := _env("INFRARAG_USER_ID")) is not None:
+        data["profiles"]["user_id"] = v
 
     return data
+
+
+def _parse_ocr(raw: dict[str, Any] | None) -> OcrConfig:
+    ocr = dict(raw or {})
+    return OcrConfig(
+        enabled=bool(ocr.get("enabled", True)),
+        lang=str(ocr.get("lang", "es")),
+        use_gpu=bool(ocr.get("use_gpu", False)),
+        min_text_chars=int(ocr.get("min_text_chars", 40)),
+        max_pdf_pages=int(ocr.get("max_pdf_pages", 50)),
+        skip_photo_folders=bool(ocr.get("skip_photo_folders", True)),
+        photo_folder_image_ratio=float(ocr.get("photo_folder_image_ratio", 0.6)),
+        photo_folder_min_files=int(ocr.get("photo_folder_min_files", 5)),
+    )
 
 
 def _build_config(data: dict[str, Any], config_path: Path) -> AppConfig:
@@ -131,12 +215,19 @@ def _build_config(data: dict[str, Any], config_path: Path) -> AppConfig:
     ingest = data["ingest"]
     chunking = data["chunking"]
     rag = data["rag"]
+    profiles = data.get("profiles") or {}
+    web = data.get("web") or {}
+    memory = data.get("memory") or {}
     attachments = data["attachments"]
     ui = data["ui"]
 
     source_dir = ingest.get("source_dir")
     if source_dir is not None:
         source_dir = str(source_dir)
+
+    ocr_raw = ingest.get("ocr")
+    if ocr_raw is not None and not isinstance(ocr_raw, dict):
+        raise ValueError("ingest.ocr must be a mapping")
 
     return AppConfig(
         app=AppSection(name=str(app["name"]), data_dir=str(app["data_dir"])),
@@ -159,6 +250,7 @@ def _build_config(data: dict[str, Any], config_path: Path) -> AppConfig:
             include_extensions=_as_tuple_str(ingest.get("include_extensions")),
             exclude_dirs=_as_tuple_str(ingest.get("exclude_dirs")),
             max_file_bytes=int(ingest["max_file_bytes"]),
+            ocr=_parse_ocr(ocr_raw if isinstance(ocr_raw, dict) else None),
         ),
         chunking=ChunkingConfig(
             size=int(chunking["size"]),
@@ -167,6 +259,25 @@ def _build_config(data: dict[str, Any], config_path: Path) -> AppConfig:
         rag=RagConfig(
             top_k=int(rag["top_k"]),
             temperature=float(rag["temperature"]),
+            hybrid_enabled=bool(rag.get("hybrid_enabled", True)),
+            hybrid_fetch_multiplier=int(rag.get("hybrid_fetch_multiplier", 4)),
+            hybrid_keyword_weight=float(rag.get("hybrid_keyword_weight", 0.35)),
+        ),
+        profiles=ProfilesConfig(
+            org_dir=str(profiles.get("org_dir", "profiles/org")),
+            users_root=str(profiles.get("users_root", "profiles/users")),
+            user_id=str(profiles.get("user_id", "default")),
+            always_include_max_chars=int(profiles.get("always_include_max_chars", 8000)),
+        ),
+        web=WebConfig(
+            enabled=bool(web.get("enabled", True)),
+            score_threshold=float(web.get("score_threshold", 0.5)),
+            max_results=int(web.get("max_results", 5)),
+            fetch_top_n=int(web.get("fetch_top_n", 2)),
+        ),
+        memory=MemoryConfig(
+            enabled=bool(memory.get("enabled", True)),
+            propose_after_answer=bool(memory.get("propose_after_answer", True)),
         ),
         attachments=AttachmentsConfig(
             max_file_bytes=int(attachments["max_file_bytes"]),
@@ -179,16 +290,41 @@ def _build_config(data: dict[str, Any], config_path: Path) -> AppConfig:
 
 
 def load_config(path: Path | str | None = None) -> AppConfig:
-    """Load YAML config, apply env overrides, and return a frozen AppConfig."""
-    config_path = Path(path) if path is not None else _DEFAULT_CONFIG_PATH
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
+    """Load default.yaml, merge local.yaml, apply env overrides."""
+    if path is not None:
+        config_path = Path(path)
+        if not config_path.is_file():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        raw = _load_yaml(config_path)
+        data = _apply_env_overrides(raw)
+        return _build_config(data, config_path.resolve())
 
-    with config_path.open(encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or {}
+    if not _DEFAULT_CONFIG_PATH.is_file():
+        raise FileNotFoundError(f"Config file not found: {_DEFAULT_CONFIG_PATH}")
 
-    if not isinstance(raw, dict):
-        raise ValueError(f"Config root must be a mapping: {config_path}")
-
+    raw = _load_yaml(_DEFAULT_CONFIG_PATH)
+    local = _load_yaml(_LOCAL_CONFIG_PATH)
+    if local:
+        raw = _deep_merge(raw, local)
     data = _apply_env_overrides(raw)
-    return _build_config(data, config_path.resolve())
+    return _build_config(data, _DEFAULT_CONFIG_PATH.resolve())
+
+
+def write_local_ollama_config(
+    *,
+    chat_model: str,
+    embed_model: str,
+    path: Path | None = None,
+) -> Path:
+    """Write config/local.yaml with chosen Ollama models (used by bootstrap)."""
+    target = path or _LOCAL_CONFIG_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "ollama": {
+            "chat_model": chat_model,
+            "embed_model": embed_model,
+        }
+    }
+    with target.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(payload, handle, default_flow_style=False, sort_keys=False)
+    return target

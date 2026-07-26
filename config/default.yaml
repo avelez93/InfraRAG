@@ -32,6 +32,9 @@ ingest:
     - .odt
     - .ods
     - .odp
+    - .png
+    - .jpg
+    - .jpeg
   exclude_dirs:
     - .git
     - node_modules
@@ -39,6 +42,15 @@ ingest:
     - .venv
     - venv
   max_file_bytes: 20971520  # 20 MiB
+  ocr:
+    enabled: true
+    lang: es
+    use_gpu: false
+    min_text_chars: 40
+    max_pdf_pages: 50
+    skip_photo_folders: true
+    photo_folder_image_ratio: 0.6
+    photo_folder_min_files: 5
 
 # Character-based chunking (token-aware chunking is a future step).
 chunking:
@@ -46,8 +58,27 @@ chunking:
   overlap: 120
 
 rag:
-  top_k: 5
-  temperature: 0.2
+  top_k: 50
+  temperature: 0.1
+  hybrid_enabled: true
+  hybrid_fetch_multiplier: 4
+  hybrid_keyword_weight: 0.35
+
+profiles:
+  org_dir: profiles/org
+  users_root: profiles/users
+  user_id: default
+  always_include_max_chars: 8000
+
+web:
+  enabled: true
+  score_threshold: 0.5
+  max_results: 5
+  fetch_top_n: 2
+
+memory:
+  enabled: true
+  propose_after_answer: true
 
 attachments:
   max_file_bytes: 20971520
