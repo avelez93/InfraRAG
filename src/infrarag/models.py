@@ -49,3 +49,21 @@ class AttachmentContext:
 
     sources: list[str]
     text: str
+
+
+@dataclass(frozen=True)
+class WebHit:
+    """A single web search result, optionally with fetched page text."""
+
+    title: str
+    url: str
+    snippet: str
+    page_text: str = ""
+
+
+@dataclass(frozen=True)
+class ProposedFact:
+    """A durable fact proposed for confirmed user memory."""
+
+    summary: str
+    text: str
